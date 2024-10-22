@@ -1,0 +1,94 @@
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        maven 'maven3'
+    }
+    
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+    
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+        
+        stage('Checkout SCM') {
+            steps {
+                git 'https://github.com/bodanapusaileela-gl/jpetstore-6.git'
+            }
+        }
+        
+        stage('Maven Compile') {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+        
+        stage('Maven Test') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh '''$SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectName=Petshop \
+                        -Dsonar.java.binaries=. \
+                        -Dsonar.projectKey=Petshop'''
+                }
+            }
+        }
+        
+        stage('Quality Gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --format XML', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        
+        stage ('Build and push to docker hub') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        // Build the Docker image
+                        sh "docker build -t petshop ."
+                        
+                        // Correctly tag the image for Docker Hub
+                        sh "docker tag petshop bodanapusaileela/petshop:latest"
+                        
+                        // Push the image to Docker Hub (no space after colon)
+                        sh "docker push bodanapusaileela/petshop:latest"
+                    }
+                }
+            }
+        }
+
+        stage("TRIVY") {
+            steps {
+                // Trivy scan the image using the correct tag
+                sh "trivy image bodanapusaileela/petshop:latest > trivy.txt"
+            }
+        }
+
+        stage ('Deploy to container') {
+            steps {
+                // Deploy the container using the correct image tag (no space after colon)
+                sh 'docker run -d --name pet1 -p 8080:8080 bodanapusaileela/petshop:latest'
+            }
+        }
+    }
+}
